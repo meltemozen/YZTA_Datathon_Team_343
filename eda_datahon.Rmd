@@ -1,0 +1,134 @@
+```{r}
+# Gerekli kütüphaneleri yükleyelim ve aktif edelim
+if(!require(tidyverse)) install.packages("tidyverse", dependencies=TRUE)
+if(!require(patchwork)) install.packages("patchwork")
+if(!require(corrplot)) install.packages("corrplot")
+if(!require(viridis)) install.packages("viridis")
+
+library(tidyverse)
+library(patchwork)
+library(corrplot)
+library(viridis)
+
+# Grafiklerin genel temasını daha şık, minimalist bir yapıya ayarlayalım
+theme_set(theme_minimal(base_size = 14) +
+          theme(plot.title = element_text(face = "bold", size = 16),
+                panel.grid.minor = element_blank()))
+
+# Veriyi yükleyelim
+train <- read_csv("train.csv", show_col_types = FALSE)
+cat("Veri başarıyla yüklendi! Toplam Gözlem:", nrow(train), "| Değişken Sayısı:", ncol(train), "\n")
+```
+
+```{r}
+# Hedef değişkenin detaylı dağılımı
+p1 <- ggplot(train, aes(x = bilissel_performans_skoru)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 40, fill = "steelblue", color = "white", alpha = 0.7) +
+  geom_density(color = "darkred", linewidth = 1.2) +
+  labs(title = "Bilişsel Performans Skoru Dağılımı",
+       subtitle = "Histogram ve Yoğunluk Eğrisi",
+       x = "Bilişsel Skor",
+       y = "Yoğunluk")
+
+p2 <- ggplot(train, aes(y = bilissel_performans_skoru, x = "")) +
+  geom_boxplot(fill = "lightblue", color = "darkblue", alpha = 0.6, outlier.color = "red") +
+  labs(title = "Kutu Grafiği (Aykırı Değerler)",
+       x = "",
+       y = "")
+
+# Patchwork kütüphanesi ile iki grafiği yan yana şıkça birleştirelim
+p1 + p2 + plot_layout(widths = c(3, 1))
+```
+
+```{r}
+# İncelenecek sayısal kolonları seçip uzun (long) formata çevirelim
+num_vars <- c("stres_skoru", "uykuya_dalma_suresi_dk", 
+              "rem_yuzdesi", "gunluk_adim_sayisi", "gunluk_calisma_saati")
+
+train_long <- train %>%
+  select(all_of(num_vars)) %>%
+  pivot_longer(cols = everything(), names_to = "Degisken", values_to = "Deger")
+
+# Çoklu yoğunluk grafiği (Facet Wrap)
+ggplot(train_long, aes(x = Deger, fill = Degisken)) +
+  geom_density(alpha = 0.6, color = "black", linewidth = 0.3) +
+  facet_wrap(~ Degisken, scales = "free", ncol = 2) +
+  scale_fill_viridis(discrete = TRUE, option = "D") +
+  labs(title = "Kritik Özelliklerin Yoğunluk (Density) Analizi",
+       x = "Değer",
+       y = "Yoğunluk") +
+  theme(legend.position = "none",
+        strip.background = element_rect(fill = "#2c3e50"),
+        strip.text = element_text(color = "white", face = "bold"))
+```
+
+```{r}
+# Meslek içindeki eksik değerleri temizleyip en yoğun mesleklere göre sıralayalım
+train_clean_meslek <- train %>%
+  filter(!is.na(meslek)) %>%
+  mutate(meslek = fct_reorder(meslek, bilissel_performans_skoru, .fun = median, .desc = TRUE))
+
+# Violin ve Boxplot iç içe
+ggplot(train_clean_meslek, aes(x = meslek, y = bilissel_performans_skoru, fill = meslek)) +
+  geom_violin(alpha = 0.5, color = NA) +
+  geom_boxplot(width = 0.2, fill = "white", color = "black", alpha = 0.7, outlier.shape = NA) +
+  scale_fill_viridis(discrete = TRUE) +
+  coord_flip() + # İsimlerin okunması için grafiği yan çeviriyoruz
+  labs(title = "Mesleklere Göre Bilişsel Performans Skoru Dağılımı",
+       subtitle = "Keman ve Kutu Grafikleri İç İçe",
+       x = "Meslek",
+       y = "Bilişsel Performans Skoru") +
+  theme(legend.position = "none")
+```
+
+```{r}
+# Sayısal kolonları seçip eksikleri çıkartarak korelasyon matrisini hesaplayalım
+cor_data <- train %>%
+  select(where(is.numeric), -id) %>%
+  drop_na() 
+
+cor_matrix <- cor(cor_data, method = "spearman") # Aykırı değerlere daha dirençli Spearman
+
+# Mükemmel bir renk paleti ile görselleştirme
+corrplot(cor_matrix, 
+         method = "color", 
+         type = "upper", 
+         order = "hclust", # Birbirine benzeyenleri yan yana grupla
+         addCoef.col = "black", # İçine rakamları yaz
+         number.cex = 0.6, # Rakam boyutu
+         tl.col = "black", tl.srt = 45, tl.cex = 0.8, # Yazı ayarları
+         col = colorRampPalette(c("#B2182B", "white", "#2166AC"))(200),
+         title = "Değişkenler Arası Spearman Korelasyon Matrisi",
+         mar = c(0,0,2,0))
+```
+
+```{r}
+# Kategorik değişkenlerin performansa etkisini tek panelde görelim
+cat_vars <- c("kronotip", "ruh_sagligi_durumu")
+
+train %>%
+  select(bilissel_performans_skoru, all_of(cat_vars)) %>%
+  pivot_longer(cols = -bilissel_performans_skoru, names_to = "Kategori", values_to = "Grup") %>%
+  filter(!is.na(Grup)) %>% # Eksikleri görselden çıkaralım
+  ggplot(aes(x = Grup, y = bilissel_performans_skoru, fill = Grup)) +
+  geom_boxplot(alpha = 0.7, outlier.alpha = 0.2) +
+  facet_wrap(~ Kategori, scales = "free_x", ncol = 2) +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") +
+  labs(title = "Kategorik Özelliklerin Bilişsel Performansa Etkisi",
+       subtitle = "Kronotip ve Ruh Sağlığı Durumu Dağılımları",
+       x = "", y = "Bilişsel Performans Skoru") +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+# Stres ve Skor arasındaki ilişkinin gerçek şeklini görelim
+ggplot(train, aes(x = stres_skoru, y = bilissel_performans_skoru)) +
+  geom_point(alpha = 0.1, color = "darkblue", size = 1) + # Veri noktaları saydam
+  geom_smooth(method = "loess", color = "red", linewidth = 1.5, se = TRUE) + # Eğilim çizgisi
+  labs(title = "Stres Skoru vs Bilişsel Performans",
+       subtitle = "Kırmızı çizgi genel düşüş trendini (Loess) gösterir",
+       x = "Stres Skoru",
+       y = "Bilişsel Performans Skoru")
+```
+
